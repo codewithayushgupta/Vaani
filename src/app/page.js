@@ -1,103 +1,162 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useRef } from "react";
+import { jsPDF } from "jspdf";
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.js
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [listening, setListening] = useState(false);
+  const [recognizedText, setRecognizedText] = useState("");
+  const [items, setItems] = useState([]);
+  const recognitionRef = useRef(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+  // Initialize SpeechRecognition
+  const startListening = () => {
+    if (!("webkitSpeechRecognition" in window)) {
+      alert("Speech Recognition not supported in this browser. Use Chrome.");
+      return;
+    }
+
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = "hi-IN"; // Supports Hindi + English mix
+    recognition.continuous = true;
+    recognition.interimResults = false;
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[event.results.length - 1][0].transcript.trim();
+      setRecognizedText((prev) => prev + " " + transcript);
+      parseSpeech(transcript);
+    };
+
+    recognition.onerror = (e) => console.error("Speech error:", e);
+
+    recognition.start();
+    recognitionRef.current = recognition;
+    setListening(true);
+  };
+
+  const stopListening = () => {
+    recognitionRef.current?.stop();
+    setListening(false);
+  };
+
+  // Parse speech into { item, qty, price }
+  const parseSpeech = (text) => {
+    const pattern = /(\d+)?\s*([a-zA-Z\u0900-\u097F\s]+)\s*(\d+)\s*(रुप(ये|या)|rs|rupees)?/gi;
+    const newItems = [];
+    let match;
+
+    while ((match = pattern.exec(text)) !== null) {
+      const qty = match[1] ? parseInt(match[1]) : 1;
+      const name = match[2].trim();
+      const price = parseInt(match[3]) || 0;
+      newItems.push({ name, qty, price, total: qty * price });
+    }
+
+    if (newItems.length > 0) {
+      setItems((prev) => [...prev, ...newItems]);
+    }
+  };
+
+  // Generate PDF
+  const generatePDF = () => {
+    const doc = new jsPDF();
+
+    doc.setFontSize(16);
+    doc.text("🧾 Simple Voice Bill", 10, 15);
+    doc.setFontSize(12);
+    doc.text(`Date: ${new Date().toLocaleDateString()}`, 10, 25);
+
+    let y = 40;
+    doc.text("Item", 10, y);
+    doc.text("Qty", 80, y);
+    doc.text("Price", 110, y);
+    doc.text("Total", 150, y);
+    y += 10;
+    doc.line(10, y, 200, y);
+
+    let totalAmount = 0;
+    y += 10;
+    items.forEach((item) => {
+      doc.text(item.name, 10, y);
+      doc.text(String(item.qty), 80, y);
+      doc.text(`₹${item.price}`, 110, y);
+      doc.text(`₹${item.total}`, 150, y);
+      y += 10;
+      totalAmount += item.total;
+    });
+
+    y += 5;
+    doc.line(10, y, 200, y);
+    y += 10;
+    doc.text(`Total Amount: ₹${totalAmount}`, 10, y);
+
+    doc.save("bill.pdf");
+  };
+
+  return (
+    <main className="min-h-screen bg-gray-950 text-gray-100 flex flex-col items-center justify-center p-6">
+      <h1 className="text-3xl font-bold mb-6">🧾 Voice Billing App</h1>
+
+      <div className="flex gap-4 mb-4">
+        {!listening ? (
+          <button
+            onClick={startListening}
+            className="px-5 py-3 bg-green-600 rounded-lg font-semibold hover:bg-green-700"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            🎙️ Start Listening
+          </button>
+        ) : (
+          <button
+            onClick={stopListening}
+            className="px-5 py-3 bg-red-600 rounded-lg font-semibold hover:bg-red-700"
           >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
+            ⏹ Stop Listening
+          </button>
+        )}
+
+        <button
+          onClick={generatePDF}
+          disabled={items.length === 0}
+          className="px-5 py-3 bg-blue-600 rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-600"
         >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+          📄 Generate PDF
+        </button>
+      </div>
+
+      <div className="w-full max-w-xl bg-gray-900 rounded-xl p-4 border border-gray-700">
+        <h2 className="text-lg font-semibold mb-2">Recognized Speech:</h2>
+        <p className="text-gray-300 text-sm min-h-[60px]">{recognizedText}</p>
+      </div>
+
+      <div className="w-full max-w-xl mt-6">
+        <h2 className="text-lg font-semibold mb-2">Parsed Items:</h2>
+        {items.length === 0 ? (
+          <p className="text-gray-400">No items detected yet.</p>
+        ) : (
+          <table className="w-full border border-gray-700 text-sm">
+            <thead className="bg-gray-800 text-gray-200">
+              <tr>
+                <th className="p-2 border border-gray-700">Item</th>
+                <th className="p-2 border border-gray-700">Qty</th>
+                <th className="p-2 border border-gray-700">Price</th>
+                <th className="p-2 border border-gray-700">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it, idx) => (
+                <tr key={idx}>
+                  <td className="p-2 border border-gray-700">{it.name}</td>
+                  <td className="p-2 border border-gray-700 text-center">{it.qty}</td>
+                  <td className="p-2 border border-gray-700 text-center">₹{it.price}</td>
+                  <td className="p-2 border border-gray-700 text-center">₹{it.total}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </main>
   );
 }
