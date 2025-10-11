@@ -61,67 +61,65 @@ export default function Home() {
     speak("Listening stopped.");
   };
 
-  // --- Handle Speech by Sending to Backend API ---
-  const handleSpeech = async (text) => {
-    if (!text) {
-      speak("माफ कीजिए, मैं समझ नहीं पाया।");
+// Replace the handleSpeech function in your React component
+
+const handleSpeech = async (text) => {
+  if (!text) {
+    speak("माफ कीजिए, मैं समझ नहीं पाया।");
+    return;
+  }
+
+  // Detect generate bill command locally
+  if (/\b(bill|बिल|बनाओ|generate)\b/i.test(text)) {
+    if (items.length === 0) {
+      speak("आपने अभी तक कोई आइटम नहीं बताया।");
       return;
     }
+    speak("बिल बना रहा हूँ।");
+    generatePDF();
+    return;
+  }
+  
+  setIsLoading(true);
 
-    // Detect generate bill command locally
-    if (/\b(bill|बिल|बनाओ|generate)\b/i.test(text)) {
-      if (items.length === 0) {
-        speak("आपने अभी तक कोई आइटम नहीं बताया।");
-        return;
-      }
-      speak("बिल बना रहा हूँ।");
-      generatePDF();
-      return;
+  try {
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text: text }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || "Backend server error");
     }
-    
-    setIsLoading(true); // Start loading indicator
-    speak("Processing... कृपया प्रतीक्षा करें।");
 
-    try {
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ text: text }),
-      });
+    const data = await response.json(); // Data is now { structured_data: {...}, response_text: "..." }
 
-      if (!response.ok) {
-        // Handle non-200 responses from the backend
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Backend server error");
-      }
+    // Update the items list from the structured_data part of the response
+    const newItems = data.structured_data.items.map(item => ({
+      name: item.description,
+      qty: item.quantity,
+      price: item.unit_price,
+      total: item.quantity * (item.unit_price || 0)
+    }));
 
-      const data = await response.json();
-      
-      // The backend now provides the full, structured list of items
-      const newItems = data.items.map(item => ({
-        name: item.description,
-        qty: item.quantity,
-        price: item.unit_price,
-        total: item.quantity * item.unit_price // Recalculate on frontend for safety
-      }));
-
-      if (newItems.length > 0) {
-        setItems(prevItems => [...prevItems, ...newItems]);
-        const addedText = newItems.map(i => `${i.qty} ${i.name}`).join(", ");
-        speak(`ठीक है, मैंने ${addedText} जोड़ दिया है।`);
-      } else {
-        speak("Backend से कोई आइटम नहीं मिला। कृपया दोबारा प्रयास करें।");
-      }
-
-    } catch (error) {
-      console.error("API Error:", error);
-      speak(`An error occurred: ${error.message}`);
-    } finally {
-      setIsLoading(false); // Stop loading indicator
+    if (newItems.length > 0) {
+      setItems(prevItems => [...prevItems, ...newItems]);
     }
-  };
+
+    // Speak the response_text that the backend generated
+    speak(data.response_text);
+
+  } catch (error) {
+    console.error("API Error:", error);
+    speak(`An error occurred: ${error.message}`);
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   // --- PDF Generation ---
   const generatePDF = () => {
