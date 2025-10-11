@@ -7,52 +7,86 @@ export default function Home() {
   const [listening, setListening] = useState(false);
   const [recognizedText, setRecognizedText] = useState("");
   const [items, setItems] = useState([]);
-  const [isLoading, setIsLoading] = useState(false); // New state for API loading
   const recognitionRef = useRef(null);
-  
-  // The backend API URL from ngrok
-  const API_URL = "https://5f042ba7e1ba.ngrok-free.app/process-invoice/";
 
-  // --- Speech Synthesis Helper ---
+  // --- Helpers: Hindi numbers + devnagari digits ---
+  const HINDI_NUMBERS = {
+    "एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पांच": 5, "छह": 6, "सात": 7,
+    "आठ": 8, "नौ": 9, "दस": 10, "ग्यारह": 11, "बारह": 12, "तेरह": 13,
+    "चौदह": 14, "पंद्रह": 15, "सोलह": 16, "सत्रह": 17, "अठारह": 18,
+    "उन्नीस": 19, "बीस": 20, "तीस": 30, "चालीस": 40, "पचास": 50,
+    "साठ": 60, "सत्तर": 70, "अस्सी": 80, "नब्बे": 90, "सौ": 100
+  };
+
+  const DEVNAGARI_DIGITS = {
+    "०":"0","१":"1","२":"2","३":"3","४":"4","५":"5","६":"6","७":"7","८":"8","९":"9"
+  };
+
+  const replaceDevanagariDigits = (s) => {
+    return s.replace(/[०१२३४५६७८९]/g, d => DEVNAGARI_DIGITS[d] || d);
+  };
+
+  const replaceHindiWordsWithDigits = (s) => {
+    let t = s;
+    for (const [word, num] of Object.entries(HINDI_NUMBERS)) {
+      const re = new RegExp(`\\b${word}\\b`, "gi");
+      t = t.replace(re, String(num));
+    }
+    return t;
+  };
+
+  const normalizeText = (raw) => {
+    if (!raw) return "";
+    let t = raw.toString();
+    t = replaceDevanagariDigits(t);
+    t = replaceHindiWordsWithDigits(t);
+    // replace currency symbols and commas with spaces
+    t = t.replace(/[₹,]/g, " ");
+    // collapse multiple spaces
+    t = t.replace(/\s+/g, " ").trim();
+    return t;
+  };
+
+  // Speak helper
   const speak = (text, lang = "hi-IN") => {
     if (!("speechSynthesis" in window)) return;
     const ut = new SpeechSynthesisUtterance(text);
     ut.lang = lang;
-    window.speechSynthesis.cancel(); // stop any previous speech
+    window.speechSynthesis.cancel(); // stop any previous
     window.speechSynthesis.speak(ut);
   };
 
-  // --- Speech Recognition Start / Stop ---
+  // Start / stop listening
   const startListening = () => {
     if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
-      alert("Speech Recognition is not supported in this browser. Please use Chrome or Edge.");
+      alert("Speech Recognition not supported in this browser. Use Chrome or Edge.");
       return;
     }
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
-    recognition.lang = "hi-IN"; // Supports Hindi-English mix (Hinglish)
+    recognition.lang = "hi-IN"; // supports Hindi-English mix
     recognition.continuous = true;
     recognition.interimResults = false;
 
     recognition.onresult = (event) => {
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
       setRecognizedText((prev) => (prev + " " + transcript).trim());
-      handleSpeech(transcript); // Process the recognized speech
+      handleSpeech(transcript);
     };
 
     recognition.onerror = (e) => {
-      console.error("Speech recognition error:", e);
-      speak("Speech recognition में कुछ समस्या हुई।");
+      console.error("Speech error:", e);
     };
-    
+
     recognition.onend = () => {
+      // keep UI consistent
       setListening(false);
     };
 
     recognition.start();
     recognitionRef.current = recognition;
     setListening(true);
-    speak("Listening started. कृपया अपने आइटम और बिल की जानकारी बताइए।");
+    speak("Listening started. कृपया अपने आइटम बताइए।");
   };
 
   const stopListening = () => {
@@ -61,67 +95,117 @@ export default function Home() {
     speak("Listening stopped.");
   };
 
-// Replace the handleSpeech function in your React component
+  // --- Improved parsing logic ---
+const parseSpeech = (text) => {
+  const normalized = normalizeText(text);
+  if (!normalized) return [];
 
-const handleSpeech = async (text) => {
-  if (!text) {
-    speak("माफ कीजिए, मैं समझ नहीं पाया।");
-    return;
-  }
+  const results = [];
+  const seen = new Set();
 
-  // Detect generate bill command locally
-  if (/\b(bill|बिल|बनाओ|generate)\b/i.test(text)) {
-    if (items.length === 0) {
-      speak("आपने अभी तक कोई आइटम नहीं बताया।");
-      return;
+  // join accidental merged numbers: "2050 मोबाइल" → "20 50 मोबाइल"
+  let fixed = normalized.replace(/(\d{2,})(?=\s*[a-zA-Z\u0900-\u097F])/g, (m) => {
+    // try to split long digit string in half if plausible
+    if (m.length >= 4) {
+      const mid = Math.floor(m.length / 2);
+      return m.slice(0, mid) + " " + m.slice(mid);
     }
-    speak("बिल बना रहा हूँ।");
-    generatePDF();
-    return;
-  }
-  
-  setIsLoading(true);
+    return m;
+  });
 
-  try {
-    const response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ text: text }),
-    });
+  // split into clauses
+  const phrases = fixed.split(/[,|और|plus|add|\band\b]/i).map(p => p.trim()).filter(Boolean);
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || "Backend server error");
-    }
-
-    const data = await response.json(); // Data is now { structured_data: {...}, response_text: "..." }
-
-    // Update the items list from the structured_data part of the response
-    const newItems = data.structured_data.items.map(item => ({
-      name: item.description,
-      qty: item.quantity,
-      price: item.unit_price,
-      total: item.quantity * (item.unit_price || 0)
-    }));
-
-    if (newItems.length > 0) {
-      setItems(prevItems => [...prevItems, ...newItems]);
+  for (let phrase of phrases) {
+    // unify ₹ spacing
+    phrase = phrase.replace(/₹\s*/g, "₹");
+    // 1️⃣ qty name price  (50 मोबाइल 20)
+    let m = phrase.match(/^\s*(\d+)\s+([^\d₹]+?)\s*(?:₹)?\s*(\d+)\s*$/);
+    if (m) {
+      const name = cleanName(m[2]);
+      const qty = parseInt(m[1]) || 1;
+      const price = parseInt(m[3]) || 0;
+      if (name && price > 0) {
+        const key = `${name}|${qty}|${price}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          results.push({ name, qty, price, total: qty * price });
+        }
+      }
+      continue;
     }
 
-    // Speak the response_text that the backend generated
-    speak(data.response_text);
+    // 2️⃣ name qty price (मोबाइल 50 20)
+    m = phrase.match(/^\s*([^\d₹]+?)\s+(\d+)\s+(?:₹)?\s*(\d+)\s*$/);
+    if (m) {
+      const name = cleanName(m[1]);
+      const qty = parseInt(m[2]) || 1;
+      const price = parseInt(m[3]) || 0;
+      const key = `${name}|${qty}|${price}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push({ name, qty, price, total: qty * price });
+      }
+      continue;
+    }
 
-  } catch (error) {
-    console.error("API Error:", error);
-    speak(`An error occurred: ${error.message}`);
-  } finally {
-    setIsLoading(false);
+    // 3️⃣ name price (default qty=1)
+    m = phrase.match(/^\s*([^\d₹]+?)\s*(?:₹)?\s*(\d+)\s*$/);
+    if (m) {
+      const name = cleanName(m[1]);
+      const price = parseInt(m[2]) || 0;
+      const key = `${name}|1|${price}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push({ name, qty: 1, price, total: price });
+      }
+    }
   }
+
+  return results;
 };
 
-  // --- PDF Generation ---
+  // remove filler words and trim name
+  const cleanName = (rawName) => {
+    if (!rawName) return "";
+    let n = rawName.toString().trim();
+    // common filler words to remove
+    n = n.replace(/\b(सिर्फ|के|के लिए|के लिये|only|sirf)\b/gi, "");
+    // trailing/leading numeric remnants
+    n = n.replace(/\b\d+\b/g, "").replace(/\s+/g, " ").trim();
+    return n;
+  };
+
+  // handle speech (commands + items)
+  const handleSpeech = (text) => {
+    const cleaned = normalizeText(text);
+    if (!cleaned) {
+      speak("माफ कीजिए, मैं समझ नहीं पाया। कृपया दोबारा बताएं।");
+      return;
+    }
+
+    // detect generate bill command
+    if (/\b(bill|बिल|बनाओ|generate)\b/i.test(cleaned)) {
+      if (items.length === 0) {
+        speak("आपने अभी तक कोई आइटम नहीं बताया।");
+        return;
+      }
+      speak("बिल बना रहा हूँ।");
+      generatePDF();
+      return;
+    }
+
+    const newItems = parseSpeech(cleaned);
+    if (newItems.length > 0) {
+      setItems((prev) => [...prev, ...newItems]);
+      const added = newItems.map(i => `${i.qty} ${i.name} ₹${i.price}`).join(", ");
+      speak(`ठीक है, मैंने ${added} जोड़ दिया है।`);
+    } else {
+      speak("माफ कीजिए, मैं समझ नहीं पाया। कृपया दोबारा बताएं।");
+    }
+  };
+
+  // --- PDF generation ---
   const generatePDF = () => {
     if (items.length === 0) {
       speak("कोई आइटम नहीं है। पहले कुछ आइटम बोलें।");
@@ -154,7 +238,7 @@ const handleSpeech = async (text) => {
       doc.text(`₹${it.total}`, 160, y);
       y += 8;
       totalAmount += it.total;
-      if (y > 270) { doc.addPage(); y = 20; }
+      if (y > 270) { doc.addPage(); y = 20; } // handle page overflow
     });
 
     y += 6;
@@ -172,7 +256,7 @@ const handleSpeech = async (text) => {
       <h1 className="text-3xl font-bold mb-6">🗣️ Talking Billing Assistant</h1>
 
       <div className="flex gap-4 mb-4">
-        {!listening && !isLoading ? (
+        {!listening ? (
           <button
             onClick={startListening}
             className="px-5 py-3 bg-green-600 rounded-lg font-semibold hover:bg-green-700"
@@ -182,25 +266,25 @@ const handleSpeech = async (text) => {
         ) : (
           <button
             onClick={stopListening}
-            disabled={isLoading}
-            className="px-5 py-3 bg-red-600 rounded-lg font-semibold hover:bg-red-700 disabled:bg-gray-500"
+            className="px-5 py-3 bg-red-600 rounded-lg font-semibold hover:bg-red-700"
           >
-            {isLoading ? "Processing..." : "⏹ Stop"}
+            ⏹ Stop
           </button>
         )}
 
         <button
-          onClick={generatePDF}
-          disabled={items.length === 0 || isLoading}
-          className="px-5 py-3 bg-blue-600 rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-500"
+          onClick={() => {
+            if (items.length === 0) speak("कोई आइटम नहीं है। पहले बोलें।");
+            else generatePDF();
+          }}
+          className="px-5 py-3 bg-blue-600 rounded-lg font-semibold hover:bg-blue-700"
         >
           📄 Generate PDF
         </button>
 
         <button
-          onClick={() => { setItems([]); setRecognizedText(""); speak("सब कुछ क्लियर कर दिया।"); }}
-          disabled={isLoading}
-          className="px-4 py-3 bg-gray-700 rounded-lg font-semibold hover:bg-gray-600 disabled:bg-gray-500"
+          onClick={() => { setItems([]); setRecognizedText(""); speak("क्लियर कर दिया।"); }}
+          className="px-4 py-3 bg-gray-700 rounded-lg font-semibold hover:bg-gray-600"
         >
           🧹 Clear
         </button>
@@ -208,13 +292,13 @@ const handleSpeech = async (text) => {
 
       <div className="w-full max-w-xl bg-gray-900 rounded-xl p-4 border border-gray-700 mb-4">
         <h2 className="text-lg font-semibold mb-2">🗒️ Recognized Speech:</h2>
-        <p className="text-gray-300 text-sm min-h-[60px]">{recognizedText || "No speech recognized yet."}</p>
+        <p className="text-gray-300 text-sm min-h-[60px]">{recognizedText || "No speech yet."}</p>
       </div>
 
       <div className="w-full max-w-xl mt-2">
         <h2 className="text-lg font-semibold mb-2">🧾 Detected Items:</h2>
         {items.length === 0 ? (
-          <p className="text-gray-400">No items detected yet. Speak your bill details to add them.</p>
+          <p className="text-gray-400">No items yet. Speak your bill details.</p>
         ) : (
           <table className="w-full border border-gray-700 text-sm">
             <thead className="bg-gray-800 text-gray-200">
