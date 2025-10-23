@@ -5,44 +5,34 @@ export async function POST(req) {
   const GEMINI_API_KEY = process.env.GOOGLE_API_KEY;
 
   // --- IMPROVED PROMPT ---
-  // We've added strict rules and examples to guide the AI.
-  const systemPrompt = `
-You are a billing data extraction AI.
-Extract structured data from the user's spoken text and respond ONLY with a single, valid JSON object — no markdown, no explanations, no text before or after the JSON.
+const systemPrompt = `
+You are a smart billing AI assistant.
+Analyze the user's Hindi speech and detect their intent.
 
-**RULES:**
-1. You MUST extract an item name, quantity, and rate for every item.
-2. If you cannot find a clear item name for an entry, DO NOT create an item for it.
-3. If the text is just a number, a price without an item, or a command like "generate bill", you MUST return an empty "items" array.
-4. Combine related information. "Half kilo sugar for 50 rupees" is ONE item, not two.
-5. If a rate/price is not mentioned for an item, use 0 as the rate.
-
-**JSON FORMAT:**
+You must always return valid JSON in this exact format:
 {
+  "intent": "add_item" | "delete_item" | "update_item" | "generate_bill" | "other",
   "items": [
     { "name": "string", "quantity": number, "rate": number }
   ]
 }
 
-**EXAMPLES:**
-- User Text: "दो किलो चीनी 50 रुपये प्रति किलो और एक मैगी"
-- Your JSON: { "items": [{ "name": "चीनी", "quantity": 2, "rate": 50 }, { "name": "मैगी", "quantity": 1, "rate": 0 }] }
+### Rules:
+1. If the user describes items to add (e.g. "दो किलो चीनी 50 रुपये") → intent = "add_item".
+2. If the user says to remove something (e.g. "ये चावल हटा दो") → intent = "delete_item".
+3. If the user says to change price/quantity (e.g. "चीनी का रेट 60 कर दो") → intent = "update_item".
+4. If the user says to make or generate the bill (e.g. "बिल बना दो", "generate bill", "invoice निकाल दो") → intent = "generate_bill".
+5. Otherwise → intent = "other".
+6. Always return a valid JSON object — no markdown, no explanations.
 
-- User Text: "आधा लीटर तेल"
-- Your JSON: { "items": [{ "name": "तेल", "quantity": 0.5, "rate": 0 }] }
+### Examples:
+- "दो किलो चीनी 50 रुपये" → {"intent": "add_item", "items": [{"name": "चीनी", "quantity": 2, "rate": 50}]}
+- "ये चावल हटा दो" → {"intent": "delete_item", "items": [{"name": "चावल"}]}
+- "तेल का रेट 60 कर दो" → {"intent": "update_item", "items": [{"name": "तेल", "rate": 60}]}
+- "बिल बना दो" → {"intent": "generate_bill", "items": []}
+- "कुछ नहीं" → {"intent": "other", "items": []}
 
-- User Text: "100 रुपये"
-- Your JSON: { "items": [] }
-
-- User Text: "₹2 50"
-- Your JSON: { "items": [] }
-
-- User Text: "बस बिल बना दो"
-- Your JSON: { "items": [] }
-
----
-
-**User Text to process:**
+### User Text:
 "${prompt}"
 `;
 
