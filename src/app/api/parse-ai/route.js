@@ -1,3 +1,16 @@
+// ✅ Handle preflight CORS request
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      "Access-Control-Allow-Origin": "*", // change to "http://localhost:8100" for local testing
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    },
+  });
+}
+
+// ✅ Main POST API handler
 export async function POST(req) {
   const { prompt } = await req.json();
 
@@ -5,7 +18,7 @@ export async function POST(req) {
   const GEMINI_API_KEY = process.env.GOOGLE_API_KEY;
 
   // --- IMPROVED PROMPT ---
-const systemPrompt = `
+  const systemPrompt = `
 You are a smart billing AI assistant.
 Analyze the user's Hindi speech and detect their intent.
 
@@ -36,47 +49,57 @@ You must always return valid JSON in this exact format:
 "${prompt}"
 `;
 
-  // Step 2: Call Gemini API (Upgraded to a more capable model)
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: systemPrompt }] }],
-        // Adding a generation config to encourage stricter JSON output
-        generationConfig: {
-            "responseMimeType": "application/json",
-        }
-      }),
-    }
-  );
+  // --- CORS Headers ---
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*", // use your frontend origin in production
+    "Content-Type": "application/json",
+  };
 
-  if (!response.ok) {
-    console.error("Gemini API Error:", await response.text());
-    return new Response(JSON.stringify({ error: "AI API request failed" }), {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: systemPrompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      console.error("Gemini API Error:", await response.text());
+      return new Response(JSON.stringify({ error: "AI API request failed" }), {
+        status: 500,
+        headers: corsHeaders,
+      });
+    }
+
+    const result = await response.json();
+    const aiText = result?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    // Step 3: Safely parse JSON
+    let parsed = { intent: "other", items: [] }; // Default fallback
+    try {
+      if (aiText) parsed = JSON.parse(aiText);
+    } catch (e) {
+      console.error("Failed to parse AI JSON response:", aiText);
+      parsed = { error: "Invalid JSON response from AI", intent: "other", items: [] };
+    }
+
+    // Step 4: Respond cleanly
+    return new Response(JSON.stringify(parsed), {
+      status: 200,
+      headers: corsHeaders,
+    });
+  } catch (error) {
+    console.error("Server error:", error);
+    return new Response(JSON.stringify({ error: "Internal server error" }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers: corsHeaders,
     });
   }
-
-  const result = await response.json();
-  const aiText = result?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-  // Step 3: Safely parse JSON
-  let parsed = { items: [] }; // Default to empty items
-  try {
-    if (aiText) {
-      parsed = JSON.parse(aiText);
-    }
-  } catch (e) {
-    console.error("Failed to parse AI JSON response:", aiText);
-    // If parsing fails, we return an empty structure to prevent frontend errors.
-    parsed = { error: "Invalid JSON response from AI", items: [] };
-  }
-
-  // Step 4: Respond cleanly
-  return new Response(JSON.stringify(parsed), {
-    headers: { "Content-Type": "application/json" },
-  });
 }
